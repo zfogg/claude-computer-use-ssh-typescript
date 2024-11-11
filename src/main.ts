@@ -82,7 +82,6 @@ async function getWeather(location: string, unit: 'celsius' | 'fahrenheit' = 'fa
 }
 
 async function shell(command: string): Promise<string> {
-  console.log("shell command", command);
   return new Promise((resolve, reject) => {
     exec(command, { maxBuffer: 50 * 1024 * 1024 }, (error, stdout, stderr) => {
       if (error) {
@@ -100,12 +99,16 @@ async function shell(command: string): Promise<string> {
 
 async function takeScreenshot(): Promise<string> {
   const screenshot = await shell(`ssh claude-testing-do "DISPLAY=:0 scrot -o /tmp/ss.png && cat /tmp/ss.png | base64 -w 0"`);
-  console.log("screenshot", screenshot);
   return screenshot;
 }
 
 async function moveMouse(x: number, y: number): Promise<void> {
   await shell(`ssh claude-testing-do "DISPLAY=:0 xdotool mousemove --sync ${x} ${y}"`);
+}
+
+async function cursorPosition(): Promise<string> {
+  const position = await shell(`ssh claude-testing-do "DISPLAY=:0 xdotool getmouselocation | cut -d' ' -f1,2"`);
+  return position;
 }
 
 async function mouseClick(button: 'left' | 'right' | 'middle'): Promise<void> {
@@ -192,7 +195,6 @@ async function processWeatherTool(
         content: JSON.stringify(weatherData),
       }],
     });
-    console.log("processed weather data");
 
     // const response = await chat(messageHistory);
     // const responseText = getResponseText(response.content);
@@ -219,7 +221,6 @@ async function processComputerTool(
   messageHistory: MessageHistory
 ) {
   const action = (content.input as any).action;
-  console.log("computer:action", action);
 
   try {
     if (action === "screenshot") {
@@ -243,8 +244,20 @@ async function processComputerTool(
       });
     }
 
-    else if (action === "move_mouse") {
+    else if (action === "mouse_move") {
       await moveMouse((content.input as any).coordinate[0], (content.input as any).coordinate[1]);
+    }
+
+    else if (action === "cursor_position") {
+      const position = await cursorPosition();
+      messageHistory.push({
+        role: 'user',
+        content: [{
+          type: "tool_result",
+          tool_use_id: content.id,
+          content: position,
+        }],
+      });
     }
 
     else if (action === "left_click") {
@@ -265,6 +278,22 @@ async function processComputerTool(
       await typeText((content.input as any).text);
     }
 
+    // if the action is an action that isn't a screenshot and doesn't return anything, we need an empty tool result
+    console.log("💛💛💛💛 TRYING to log empty tool result", action);
+    console.log(["mouse_move", "left_click", "middle_click", "right_click", "key", "type"].includes(action), '["move_mouse", "left_click", "middle_click", "right_click", "key", "type"].includes(action)')
+    if (["mouse_move", "left_click", "middle_click", "right_click", "key", "type"].includes(action)) {
+      console.log("LOGGING EMPTY TOOL RESULT");
+      console.log("LOGGING EMPTY TOOL RESULT");
+      console.log("LOGGING EMPTY TOOL RESULT");
+      messageHistory.push({
+        role: 'user',
+        content: [{
+          type: "tool_result",
+          tool_use_id: content.id,
+        }],
+      });
+    }
+
   } catch (error) {
     // Handle screenshot errors
     messageHistory.push({
@@ -280,9 +309,9 @@ async function processComputerTool(
 }
 
 // Then modify the processToolResponse function to use these new functions
-async function processToolResponse(content: any, messageHistory: MessageHistory) {
+async function processToolResponse(content: any, messageHistory: MessageHistory): Promise<boolean> {
   if (content.type !== 'tool_use') {
-    return;
+    return false;
   }
 
   // Add tool use to the last message's content
@@ -304,6 +333,7 @@ async function processToolResponse(content: any, messageHistory: MessageHistory)
     default:
       console.warn(`Unknown tool type: ${content.name}`);
   }
+  return true;
 }
 
 // Then modify the messageLoop function to use the new function
@@ -372,14 +402,55 @@ async function messageLoop() {
 }
 
 async function agentLoop() {
-  while (true) {
     // 1. ask the user for input
     // 2. send the convo to the ai
     // 3. display the AI's response
     // 4. if the AI's response contains a tool call, execute the tool call and loop to step 2
     // 5. loop to step 1
+
+  while (true) {
+    console.log('AI Agent started. Type "exit" to quit.\n');
+
+    // 1. ask the user for input
+    const userInput = await getUserInput();
+    if (userInput.toLowerCase() === 'exit') {
+      console.log('Goodbye!');
+      rl.close();
+      break;
+    }
+    // Add user message to history
+    messageHistory.push({ role: 'user', content: userInput });
+
+    // 2. send the convo to the ai
+    while (true) {
+      console.log("MESSAGE HISTORY");
+      for (const message of messageHistory) {
+        console.log(message.role, message.content);
+      }
+      const response = await chat(messageHistory);
+      // Extract text from response
+      const responseText = getResponseText(response.content);
+      messageHistory.push({ role: 'assistant', content: responseText });
+      // 3. display the AI's response
+      console.log('\nAssistant:', responseText, '\n');
+
+      let processedToolResponse = false;
+      // Check for tool calls in the response
+      for (const content of response.content) {
+        console.log("content", content);
+        processedToolResponse = await processToolResponse(content, messageHistory) || processedToolResponse;
+      }
+      // 4. if the AI's response contains a tool call, execute the tool call and loop to step 2 else break
+      if (!processedToolResponse) {
+        console.log("❗ breaking");
+        break;
+      }
+      console.log("✅ looping");
+    }
+    // 5. loop to step 1
   }
 }
 
 // Start the message loop
-messageLoop();
+//messageLoop();
+agentLoop();

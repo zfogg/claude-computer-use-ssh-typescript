@@ -3,6 +3,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import type { MessageParam, ToolUseBlock, ToolUseBlockParam, ToolResultBlockParam } from '@anthropic-ai/sdk/resources/messages';
 import readline from 'readline';
 import fetch from 'node-fetch';
+import { exec } from 'child_process';
 
 // Initialize Anthropic client
 const anthropic = new Anthropic({
@@ -78,6 +79,52 @@ async function getWeather(location: string, unit: 'celsius' | 'fahrenheit' = 'fa
     }
     throw new Error('Failed to get weather data: Unknown error');
   }
+}
+
+async function shell(command: string): Promise<string> {
+  console.log("shell command", command);
+  return new Promise((resolve, reject) => {
+    exec(command, { maxBuffer: 50 * 1024 * 1024 }, (error, stdout, stderr) => {
+      if (error) {
+        reject(new Error(`Shell command failed: ${error.message}`));
+        return;
+      } else if (stderr) {
+        reject(new Error(`Shell command failed: ${stderr}`));
+        return;
+      } else {
+        resolve(stdout.toString().trim())
+      }
+    });
+  });
+}
+
+async function takeScreenshot(): Promise<string> {
+  const screenshot = await shell(`ssh claude-testing-do "DISPLAY=:0 scrot -o /tmp/ss.png && cat /tmp/ss.png | base64 -w 0"`);
+  console.log("screenshot", screenshot);
+  return screenshot;
+}
+
+async function moveMouse(x: number, y: number): Promise<void> {
+  await shell(`ssh claude-testing-do "DISPLAY=:0 xdotool mousemove --sync ${x} ${y}"`);
+}
+
+async function mouseClick(button: 'left' | 'right' | 'middle'): Promise<void> {
+  let buttonNumber;
+  switch (button) {
+    case 'left': buttonNumber = 1; break;
+    case 'middle': buttonNumber = 2; break;
+    case 'right': buttonNumber = 3; break;
+    default: throw new Error(`Unknown button: ${button}`);
+  }
+  await shell(`ssh claude-testing-do "DISPLAY=:0 xdotool click ${buttonNumber}"`);
+}
+
+async function keypress(key: string): Promise<void> {
+  await shell(`ssh claude-testing-do "DISPLAY=:0 xdotool key ${key}"`);
+}
+
+async function typeText(text: string): Promise<void> {
+  await shell(`ssh claude-testing-do "DISPLAY=:0 xdotool type --delay 100 \"${text}\""`);
 }
 
 async function chat(messageHistory: MessageHistory) {
@@ -174,15 +221,58 @@ async function processComputerTool(
   const action = (content.input as any).action;
   console.log("computer:action", action);
 
-  // For now, we'll just return a mock screenshot message
-  // You can implement actual screenshot functionality later
-  if (action === "screenshot") {
+  try {
+    if (action === "screenshot") {
+      const screenshot = await takeScreenshot();
+      const base64Data = screenshot;
+        
+      messageHistory.push({
+        role: 'user',
+        content: [{
+          type: "tool_result",
+          tool_use_id: content.id,
+          content: [{
+            type: "image",
+            source: {
+              type: "base64",
+              media_type: "image/png",
+              data: base64Data,
+            },
+          }],
+        }],
+      });
+    }
+
+    else if (action === "move_mouse") {
+      await moveMouse((content.input as any).coordinate[0], (content.input as any).coordinate[1]);
+    }
+
+    else if (action === "left_click") {
+      await mouseClick("left");
+    }
+    else if (action === "middle_click") {
+      await mouseClick("middle");
+    }
+    else if (action === "right_click") {
+      await mouseClick("right");
+    }
+
+    else if (action === "key") {
+      await keypress((content.input as any).text);
+    }
+
+    else if (action === "type") {
+      await typeText((content.input as any).text);
+    }
+
+  } catch (error) {
+    // Handle screenshot errors
     messageHistory.push({
       role: 'user',
       content: [{
         type: "tool_result",
         tool_use_id: content.id,
-        content: "Screenshot functionality not implemented",
+        content: `Error with computer tool: ${error instanceof Error ? error.message : 'Unknown error'}`,
         is_error: true,
       }],
     });
@@ -263,8 +353,11 @@ async function messageLoop() {
             const responseText = getResponseText(response.content);
             messageHistory.push({ role: 'assistant', content: responseText });
             console.log('\nAssistant:', responseText, '\n');
+            for (const content of response.content) {
+              await processToolResponse(content, messageHistory);
+            }
           } else {
-            console.log("breaking");
+            console.log("❗ breaking");
             break;
           }
         }
@@ -275,6 +368,16 @@ async function messageLoop() {
   } catch (error) {
     console.error('Error:', error instanceof Error ? error.message : 'Unknown error');
     rl.close();
+  }
+}
+
+async function agentLoop() {
+  while (true) {
+    // 1. ask the user for input
+    // 2. send the convo to the ai
+    // 3. display the AI's response
+    // 4. if the AI's response contains a tool call, execute the tool call and loop to step 2
+    // 5. loop to step 1
   }
 }
 

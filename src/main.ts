@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import Anthropic from '@anthropic-ai/sdk';
-import type { MessageParam, ToolUseBlock, ToolUseBlockParam, ToolResultBlockParam } from '@anthropic-ai/sdk/resources/messages';
+import type { MessageParam, ToolUseBlockParam, ContentBlock } from '@anthropic-ai/sdk/resources/messages';
 import readline from 'readline';
 import fetch from 'node-fetch';
 import { exec } from 'child_process';
@@ -10,18 +10,10 @@ const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
-// Create readline interface for user input
-const rl = readline.createInterface({
-  input: process.stdin,
-  output: process.stdout,
-});
-
 // Initialize conversation history
+let messageHistory: MessageParam[] = [];
 
-//type MessageHistory = { role: 'user' | 'assistant'; content: string }[]
-const messageHistory: MessageParam[] = [];
-
-// Function to get user input
+// Grab the user's input from the console
 const getUserInput = (): Promise<string> => {
   return new Promise((resolve) => {
     rl.question('You: ', (input) => {
@@ -31,7 +23,7 @@ const getUserInput = (): Promise<string> => {
 };
 
 // Function to extract text content from response
-const getResponseText = (content: Anthropic.Beta.BetaContentBlock[]): string => {
+const getResponseText = (content: ContentBlock[]): string => {
   const textBlock = content.find(block => 'type' in block && block.type === 'text');
   return textBlock && 'text' in textBlock ? textBlock.text : 'No response text available';
 };
@@ -122,6 +114,10 @@ async function mouseClick(button: 'left' | 'right' | 'middle'): Promise<void> {
   await shell(`ssh claude-testing-do "DISPLAY=:0 xdotool click ${buttonNumber}"`);
 }
 
+async function doubleClick(): Promise<void> {
+  await shell(`ssh claude-testing-do "DISPLAY=:0 xdotool click 1 click 1"`);
+}
+
 async function keypress(key: string): Promise<void> {
   await shell(`ssh claude-testing-do "DISPLAY=:0 xdotool key ${key}"`);
 }
@@ -195,12 +191,6 @@ async function processWeatherTool(
         content: JSON.stringify(weatherData),
       }],
     });
-
-    // const response = await chat(messageHistory);
-    // const responseText = getResponseText(response.content);
-    // messageHistory.push({ role: 'assistant', content: responseText });
-    // console.log('\nAssistant:', responseText, '\n');
-    // console.log(response, content);
   } catch (error) {
     const errorMessage = `Error getting weather data: ${error instanceof Error ? error.message : 'Unknown error'}`;
     messageHistory.push({
@@ -244,10 +234,6 @@ async function processComputerTool(
       });
     }
 
-    else if (action === "mouse_move") {
-      await moveMouse((content.input as any).coordinate[0], (content.input as any).coordinate[1]);
-    }
-
     else if (action === "cursor_position") {
       const position = await cursorPosition();
       messageHistory.push({
@@ -260,6 +246,10 @@ async function processComputerTool(
       });
     }
 
+    else if (action === "mouse_move") {
+      await moveMouse((content.input as any).coordinate[0], (content.input as any).coordinate[1]);
+    }
+
     else if (action === "left_click") {
       await mouseClick("left");
     }
@@ -268,6 +258,9 @@ async function processComputerTool(
     }
     else if (action === "right_click") {
       await mouseClick("right");
+    }
+    else if (action === "double_click") {
+      await doubleClick();
     }
 
     else if (action === "key") {
@@ -278,13 +271,8 @@ async function processComputerTool(
       await typeText((content.input as any).text);
     }
 
-    // if the action is an action that isn't a screenshot and doesn't return anything, we need an empty tool result
-    console.log("💛💛💛💛 TRYING to log empty tool result", action);
-    console.log(["mouse_move", "left_click", "middle_click", "right_click", "key", "type"].includes(action), '["move_mouse", "left_click", "middle_click", "right_click", "key", "type"].includes(action)')
-    if (["mouse_move", "left_click", "middle_click", "right_click", "key", "type"].includes(action)) {
-      console.log("LOGGING EMPTY TOOL RESULT");
-      console.log("LOGGING EMPTY TOOL RESULT");
-      console.log("LOGGING EMPTY TOOL RESULT");
+    // if the action is an action that doesn't return anything, we need an empty tool result
+    if (["mouse_move", "left_click", "middle_click", "right_click", "double_click", "key", "type"].includes(action)) {
       messageHistory.push({
         role: 'user',
         content: [{
@@ -296,24 +284,22 @@ async function processComputerTool(
 
   } catch (error) {
     // Handle screenshot errors
+    const errorMessage = `Error with computer tool: ${error instanceof Error ? error.message : 'Unknown error'}`;
     messageHistory.push({
       role: 'user',
       content: [{
         type: "tool_result",
         tool_use_id: content.id,
-        content: `Error with computer tool: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        content: errorMessage,
         is_error: true,
       }],
     });
+    console.log('\nAssistant:', errorMessage, '\n');
   }
 }
 
 // Then modify the processToolResponse function to use these new functions
-async function processToolResponse(content: any, messageHistory: MessageHistory): Promise<boolean> {
-  if (content.type !== 'tool_use') {
-    return false;
-  }
-
+async function processToolResponse(content: ToolUseBlockParam, messageHistory: MessageHistory): Promise<boolean> {
   // Add tool use to the last message's content
   const lastMessage = messageHistory[messageHistory.length - 1];
   if (Array.isArray(lastMessage.content)) {
@@ -321,6 +307,8 @@ async function processToolResponse(content: any, messageHistory: MessageHistory)
   } else {
     lastMessage.content = [{ type: "text", text: lastMessage.content }, content];
   }
+
+  console.log("tool use", content.input);
 
   // Process based on tool type
   switch (content.name) {
@@ -336,118 +324,81 @@ async function processToolResponse(content: any, messageHistory: MessageHistory)
   return true;
 }
 
-// Then modify the messageLoop function to use the new function
-async function messageLoop() {
+// Create readline interface for user input
+const rl = readline.createInterface({
+  input: process.stdin,
+  output: process.stdout,
+});
+
+async function agentLoop() {
+  // 1. ask the user for input
+  // 2. send the convo to the ai
+  // 3. display the AI's response
+  // 4. if the AI's response contains a tool call, execute the tool call and loop to step 2 or break
+  // 5. loop to step 1
+
   try {
     console.log('AI Agent started. Type "exit" to quit.\n');
 
     while (true) {
-      // Get user input
-      const userInput = await getUserInput();
 
-      // Check for exit command
+      // 1. ask the user for input
+      const userInput = await getUserInput();
       if (userInput.toLowerCase() === 'exit') {
         console.log('Goodbye!');
         rl.close();
         break;
       }
 
+      if (userInput.toLowerCase() === 'reset') {
+        console.log('Resetting conversation history...');
+        messageHistory = [];
+        continue;
+      }
+
+      if (userInput.toLowerCase() === 'log') {
+        console.log('Logging conversation history...');
+        for (const message of messageHistory) {
+          console.log(`role=${message.role}`, message.content);
+        }
+        continue;
+      }
+
       // Add user message to history
       messageHistory.push({ role: 'user', content: userInput });
 
-      // Get AI response
-      const response = await chat(messageHistory);
+      // 2. send the convo to the ai
+      while (true) {
+        // console.log("MESSAGE HISTORY");
+        // for (const message of messageHistory) {
+        //   console.log(message.role, message.content);
+        // }
+        const response = await chat(messageHistory);
+        const responseText = getResponseText(response.content);
+        messageHistory.push({ role: 'assistant', content: responseText });
+        // 3. display the AI's response
+        console.log('\nAssistant:', responseText);
 
-      // Extract text from response
-      const responseText = getResponseText(response.content);
-      messageHistory.push({ role: 'assistant', content: responseText });
-      console.log('\nAssistant:', responseText, '\n');
-
-      // Check for tool calls in the response
-      for (const content of response.content) {
-        console.log("content", content);
-        await processToolResponse(content, messageHistory);
-        while (true) {
-          const lastMessage = messageHistory[messageHistory.length - 1];
-          const lastMessageContent = lastMessage.content[lastMessage.content.length - 1];
-
-          // console.log("lastMessageContent", lastMessage,lastMessageContent);
-          console.log("MESSAGE HISTORY");
-          for (const message of messageHistory) {
-            console.log(message.role, message.content);
+        // 4. if the AI's response contains a tool call, execute the tool call and loop to step 2 or break
+        let processedToolResponse = false;
+        for (const content of response.content) {
+          if (content.type !== 'tool_use') {
+            continue;
           }
-          
-          if ((lastMessageContent as ToolResultBlockParam).type === "tool_result") {
-            console.log("lastMessageContent tool_use");
-            const response = await chat(messageHistory);
-            const responseText = getResponseText(response.content);
-            messageHistory.push({ role: 'assistant', content: responseText });
-            console.log('\nAssistant:', responseText, '\n');
-            for (const content of response.content) {
-              await processToolResponse(content, messageHistory);
-            }
-          } else {
-            console.log("❗ breaking");
-            break;
-          }
+          processedToolResponse = processedToolResponse || await processToolResponse(content, messageHistory);
         }
+        if (!processedToolResponse) {
+          // console.log("❗ breaking");
+          break;
+        }
+        // console.log("✅ looping");
       }
-
+      // 5. loop to step 1
     }
 
   } catch (error) {
     console.error('Error:', error instanceof Error ? error.message : 'Unknown error');
     rl.close();
-  }
-}
-
-async function agentLoop() {
-    // 1. ask the user for input
-    // 2. send the convo to the ai
-    // 3. display the AI's response
-    // 4. if the AI's response contains a tool call, execute the tool call and loop to step 2
-    // 5. loop to step 1
-
-  while (true) {
-    console.log('AI Agent started. Type "exit" to quit.\n');
-
-    // 1. ask the user for input
-    const userInput = await getUserInput();
-    if (userInput.toLowerCase() === 'exit') {
-      console.log('Goodbye!');
-      rl.close();
-      break;
-    }
-    // Add user message to history
-    messageHistory.push({ role: 'user', content: userInput });
-
-    // 2. send the convo to the ai
-    while (true) {
-      console.log("MESSAGE HISTORY");
-      for (const message of messageHistory) {
-        console.log(message.role, message.content);
-      }
-      const response = await chat(messageHistory);
-      // Extract text from response
-      const responseText = getResponseText(response.content);
-      messageHistory.push({ role: 'assistant', content: responseText });
-      // 3. display the AI's response
-      console.log('\nAssistant:', responseText, '\n');
-
-      let processedToolResponse = false;
-      // Check for tool calls in the response
-      for (const content of response.content) {
-        console.log("content", content);
-        processedToolResponse = await processToolResponse(content, messageHistory) || processedToolResponse;
-      }
-      // 4. if the AI's response contains a tool call, execute the tool call and loop to step 2 else break
-      if (!processedToolResponse) {
-        console.log("❗ breaking");
-        break;
-      }
-      console.log("✅ looping");
-    }
-    // 5. loop to step 1
   }
 }
 

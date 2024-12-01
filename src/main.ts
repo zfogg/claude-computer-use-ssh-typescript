@@ -1,16 +1,20 @@
+// INFO: Suppress deprecation warning terminal output (punycody)
+process.removeAllListeners('warning');
+
 import 'dotenv/config';
 import Anthropic from '@anthropic-ai/sdk';
-import type { MessageParam, ToolUseBlockParam, ContentBlock } from '@anthropic-ai/sdk/resources/messages';
+import type { MessageParam, ToolUseBlockParam, ContentBlock } from '@anthropic-ai/sdk/resources/messages' with { 'resolution-mode': 'import' };
 import readline from 'readline';
-import fetch from 'node-fetch';
-import { exec } from 'child_process';
+import { stripIndents } from 'common-tags';
+import { processWeatherTool } from './weather.ts';
+import { processComputerTool } from './computer.ts';
 
 // Initialize Anthropic client
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
-// Initialize conversation history
+// Initialize empty conversation history
 let messageHistory: MessageParam[] = [];
 
 // Grab the user's input from the console
@@ -22,116 +26,28 @@ const getUserInput = (): Promise<string> => {
   });
 };
 
-// Function to extract text content from response
+// Extract text content from chat API response data
 const getResponseText = (content: ContentBlock[]): string => {
   const textBlock = content.find(block => 'type' in block && block.type === 'text');
   return textBlock && 'text' in textBlock ? textBlock.text : 'No response text available';
 };
 
-interface WeatherAPIResponse {
-  current: {
-    temp_c: number;
-    temp_f: number;
-    feelslike_c: number;
-    feelslike_f: number;
-    humidity: number;
-    condition: {
-      text: string;
-    };
-  };
-}
 
-// Function to get weather data using free API
-async function getWeather(location: string, unit: 'celsius' | 'fahrenheit' = 'fahrenheit') {
-  try {
-    const apiKey = process.env.WEATHERAPI_API_KEY;
-    const response = await fetch(`https://api.weatherapi.com/v1/current.json?key=${apiKey}&q=${encodeURIComponent(location)}&aqi=no`);
-    
-    if (!response.ok) {
-      throw new Error('Weather service unavailable');
-    }
-
-    const data = await response.json() as WeatherAPIResponse;
-    const current = data.current;
-    
-    // Convert temperature based on unit preference
-    const temp = unit === 'celsius' ? current.temp_c : current.temp_f;
-    const feelsLike = unit === 'celsius' ? current.feelslike_c : current.feelslike_f;
-
-    return {
-      temperature: Math.round(temp),
-      feelsLike: Math.round(feelsLike),
-      humidity: current.humidity,
-      description: current.condition.text,
-      unit: unit
-    };
-  } catch (error) {
-    if (error instanceof Error) {
-      throw new Error(`Failed to get weather data: ${error.message}`);
-    }
-    throw new Error('Failed to get weather data: Unknown error');
-  }
-}
-
-async function shell(command: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    exec(command, { maxBuffer: 50 * 1024 * 1024 }, (error, stdout, stderr) => {
-      if (error) {
-        reject(new Error(`Shell command failed: ${error.message}`));
-        return;
-      } else if (stderr) {
-        reject(new Error(`Shell command failed: ${stderr}`));
-        return;
-      } else {
-        resolve(stdout.toString().trim())
-      }
-    });
-  });
-}
-
-async function takeScreenshot(): Promise<string> {
-  const screenshot = await shell(`ssh claude-testing-do "DISPLAY=:0 scrot -o /tmp/ss.png && cat /tmp/ss.png | base64 -w 0"`);
-  return screenshot;
-}
-
-async function moveMouse(x: number, y: number): Promise<void> {
-  await shell(`ssh claude-testing-do "DISPLAY=:0 xdotool mousemove --sync ${x} ${y}"`);
-}
-
-async function cursorPosition(): Promise<string> {
-  const position = await shell(`ssh claude-testing-do "DISPLAY=:0 xdotool getmouselocation | cut -d' ' -f1,2"`);
-  return position;
-}
-
-async function mouseClick(button: 'left' | 'right' | 'middle'): Promise<void> {
-  let buttonNumber;
-  switch (button) {
-    case 'left': buttonNumber = 1; break;
-    case 'middle': buttonNumber = 2; break;
-    case 'right': buttonNumber = 3; break;
-    default: throw new Error(`Unknown button: ${button}`);
-  }
-  await shell(`ssh claude-testing-do "DISPLAY=:0 xdotool click ${buttonNumber}"`);
-}
-
-async function doubleClick(): Promise<void> {
-  await shell(`ssh claude-testing-do "DISPLAY=:0 xdotool click 1 click 1"`);
-}
-
-async function keypress(key: string): Promise<void> {
-  await shell(`ssh claude-testing-do "DISPLAY=:0 xdotool key ${key}"`);
-}
-
-async function typeText(text: string): Promise<void> {
-  await shell(`ssh claude-testing-do "DISPLAY=:0 xdotool type --delay 100 \"${text}\""`);
-}
-
-async function chat(messageHistory: MessageHistory) {
+async function chat(messageHistory: MessageParam[]) {
   const response = await anthropic.beta.messages.create({
-    system: `
+    system: stripIndents`
       You are a helpful assistant that can use tools to get information.
       If anyone asks you to do something, you should use the tool to do it that makes the most sense.
-      If you need to use a tool multiple times, use it in a loop, once for each time you need to use it.
+
+      Additional instructions for the computer tool:
+      As you use your computer tool and take screenshots to navigate around it.
+      * make sure you try to understand where your cursor is before trying to click before clicking.
+      * Try to predict where text will be input when you type with the computer tool. If you don't,
+      the computer may be focused on the wrong text box or window as you enter text, which is undesirable for
+      you.
+      * You may need to click a window or input box to give it focus before typing text into it. Feel encouraged
+      to do this. For example, when solving a problem with the computer tool and a computer browser, you
+      may need to click into the browser's address bar to give it focus before typing in the adress you want to navigate to.
     `,
     model: "claude-3-5-sonnet-20241022",
     max_tokens: 1024,
@@ -140,7 +56,9 @@ async function chat(messageHistory: MessageHistory) {
       {
         type: "computer_20241022",
         name: "computer",
-        display_width_px: 1024,
+        // display_width_px: 1024,
+        // display_height_px: 768,
+        display_width_px: 1360,
         display_height_px: 768,
         display_number: 1
       },
@@ -170,136 +88,8 @@ async function chat(messageHistory: MessageHistory) {
   return response;
 }
 
-// First, let's add the MessageHistory type at the top with other types
-type MessageHistory = MessageParam[];
-
-// Add these new functions after the getWeather function
-
-async function processWeatherTool(
-  content: any, 
-  messageHistory: MessageHistory
-) {
-  try {
-    const args = content.input as { location: string, unit: 'celsius' | 'fahrenheit' };
-    const weatherData: any = await getWeather(args.location, args.unit);
-    weatherData.location = args.location
-    messageHistory.push({
-      role: 'user',
-      content: [{
-        tool_use_id: content.id,
-        type: "tool_result",
-        content: JSON.stringify(weatherData),
-      }],
-    });
-  } catch (error) {
-    const errorMessage = `Error getting weather data: ${error instanceof Error ? error.message : 'Unknown error'}`;
-    messageHistory.push({
-      role: 'user',
-      content: [{
-        type: "tool_result",
-        tool_use_id: content.id,
-        content: errorMessage,
-        is_error: true,
-      }],
-    });
-    console.log('\nAssistant:', errorMessage, '\n');
-  }
-}
-
-async function processComputerTool(
-  content: any,
-  messageHistory: MessageHistory
-) {
-  const action = (content.input as any).action;
-
-  try {
-    if (action === "screenshot") {
-      const screenshot = await takeScreenshot();
-      const base64Data = screenshot;
-        
-      messageHistory.push({
-        role: 'user',
-        content: [{
-          type: "tool_result",
-          tool_use_id: content.id,
-          content: [{
-            type: "image",
-            source: {
-              type: "base64",
-              media_type: "image/png",
-              data: base64Data,
-            },
-          }],
-        }],
-      });
-    }
-
-    else if (action === "cursor_position") {
-      const position = await cursorPosition();
-      messageHistory.push({
-        role: 'user',
-        content: [{
-          type: "tool_result",
-          tool_use_id: content.id,
-          content: position,
-        }],
-      });
-    }
-
-    else if (action === "mouse_move") {
-      await moveMouse((content.input as any).coordinate[0], (content.input as any).coordinate[1]);
-    }
-
-    else if (action === "left_click") {
-      await mouseClick("left");
-    }
-    else if (action === "middle_click") {
-      await mouseClick("middle");
-    }
-    else if (action === "right_click") {
-      await mouseClick("right");
-    }
-    else if (action === "double_click") {
-      await doubleClick();
-    }
-
-    else if (action === "key") {
-      await keypress((content.input as any).text);
-    }
-
-    else if (action === "type") {
-      await typeText((content.input as any).text);
-    }
-
-    // if the action is an action that doesn't return anything, we need an empty tool result
-    if (["mouse_move", "left_click", "middle_click", "right_click", "double_click", "key", "type"].includes(action)) {
-      messageHistory.push({
-        role: 'user',
-        content: [{
-          type: "tool_result",
-          tool_use_id: content.id,
-        }],
-      });
-    }
-
-  } catch (error) {
-    // Handle screenshot errors
-    const errorMessage = `Error with computer tool: ${error instanceof Error ? error.message : 'Unknown error'}`;
-    messageHistory.push({
-      role: 'user',
-      content: [{
-        type: "tool_result",
-        tool_use_id: content.id,
-        content: errorMessage,
-        is_error: true,
-      }],
-    });
-    console.log('\nAssistant:', errorMessage, '\n');
-  }
-}
-
 // Then modify the processToolResponse function to use these new functions
-async function processToolResponse(content: ToolUseBlockParam, messageHistory: MessageHistory): Promise<boolean> {
+async function processToolResponse(content: ToolUseBlockParam, messageHistory: MessageParam[]): Promise<boolean> {
   // Add tool use to the last message's content
   const lastMessage = messageHistory[messageHistory.length - 1];
   if (Array.isArray(lastMessage.content)) {

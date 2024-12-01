@@ -7,8 +7,10 @@
     "node": ">= 20.9 < 24"
   },
   "devDependencies": {
+    "@types/common-tags": "^1.8.4",
     "@types/node": "~20",
-    "@types/node-fetch": "^2.6.11",
+    "@types/node-fetch": "^3.0.2",
+    "nodemon": "^3.1.7",
     "tsx": "^4.19.2",
     "typescript": "~5.5",
     "typescript-eslint": "~8.5"
@@ -23,6 +25,7 @@
   "license": "Apache-2.0",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.1",
+    "common-tags": "^1.8.2",
     "dotenv": "^16.4.5",
     "node-fetch": "^3.3.2",
     "tslib": "~2.7"

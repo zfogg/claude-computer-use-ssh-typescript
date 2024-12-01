@@ -8,3 +8,5 @@
 ## Features
 
 - [ ] click and drag computer-use tool call functionality.
+- [ ] instagram photo suggestions
+- [ ] youtube video suggestions

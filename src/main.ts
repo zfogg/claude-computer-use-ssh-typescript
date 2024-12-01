@@ -36,18 +36,33 @@ const getResponseText = (content: ContentBlock[]): string => {
 async function chat(messageHistory: MessageParam[]) {
   const response = await anthropic.beta.messages.create({
     system: stripIndents`
-      You are a helpful assistant that can use tools to get information.
-      If anyone asks you to do something, you should use the tool to do it that makes the most sense.
+      You are a helpful assistant that can use tools to get information, solve problems, and perform
+      other tasks for people. If someone asks talks to you, you solve their problem with your tools
+      and knowledge as you see fit.
 
       Additional instructions for the computer tool:
       As you use your computer tool and take screenshots to navigate around it.
-      * make sure you try to understand where your cursor is before trying to click before clicking.
-      * Try to predict where text will be input when you type with the computer tool. If you don't,
-      the computer may be focused on the wrong text box or window as you enter text, which is undesirable for
-      you.
-      * You may need to click a window or input box to give it focus before typing text into it. Feel encouraged
-      to do this. For example, when solving a problem with the computer tool and a computer browser, you
-      may need to click into the browser's address bar to give it focus before typing in the adress you want to navigate to.
+      * The computer is running an Ubuntu Linux graphical desktop environment.
+      * You have 'sudo' privileges.
+      * Use Firefox as your web browser. There is an icon for it in the bottom taskbar.
+      * Use Konsole as your terminal emulator. There is an icon for it in the bottom taskbar.
+      * You may install additional software packages as you need them with the terminal and the 'apt' command.
+      * Make sure to understand a good amount about where the cursor is before clicking. Understand
+      what will happen if you click by examining the screen and cursor.
+      * Try to predict how text will be input when you type with the computer tool. If you don't properly do this,
+      the computer may be focused on the wrong text box or window as you enter text, for example, which is
+      undesirable for you.
+      * You may need to click a window or input box to give it focus before typing text into it. Feel
+      encouraged to do this. For example, when solving a problem with the computer tool and a computer browser,
+      you may need to click into the browser's address bar to give it focus before typing in the adress you
+      want to navigate to.
+
+      The current time and date is ${new Date().toLocaleString()}. I want you to use this information when
+      performing tasks. You may, for instance, be asked for election results whose results you do not know.
+      You should determine if you can get the user their answer via your tools with the time and date
+      information that you have to properly answer them before denying to try because your knowledgebase
+      is predated by the time and date of the election. There are many other cases where this sort of logic
+      may apply.
     `,
     model: "claude-3-5-sonnet-20241022",
     max_tokens: 1024,
@@ -58,9 +73,11 @@ async function chat(messageHistory: MessageParam[]) {
         name: "computer",
         // display_width_px: 1024,
         // display_height_px: 768,
-        display_width_px: 1360,
-        display_height_px: 768,
-        display_number: 1
+        // display_width_px: 1360,
+        // display_height_px: 768,
+        display_width_px: 1600,
+        display_height_px: 1200,
+        display_number: 1,
       },
       {
         name: "get_weather",
@@ -147,9 +164,21 @@ async function agentLoop() {
       }
 
       if (userInput.toLowerCase() === 'log') {
-        console.log('Logging conversation history...');
+        console.log("Logging conversation history...");
         for (const message of messageHistory) {
-          console.log(`role=${message.role}`, message.content);
+          let output;
+          if (typeof message.content === "string") {
+            output = message.content;
+          } else {
+            let m = message.content.find((content) => content.type === "text")
+            if (m && "text" in m) {
+              output = m.text;
+            } else {
+              output = JSON.stringify(message.content[0]);
+              output = output.length > 180 ? output.substring(0, 177) + "..." : output;
+            }
+          }
+          console.log(`role=${message.role}`, output);
         }
         continue;
       }

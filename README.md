@@ -1,4 +1,4 @@
-# Claude Testing
+# Claude "Computer Use" via SSH in Typescript
 
 A TypeScript-based project that demonstrates integration with Anthropic's Claude AI model and provides interactive tools for AI-assisted computer control and weather information retrieval.
 
@@ -16,7 +16,7 @@ A TypeScript-based project that demonstrates integration with Anthropic's Claude
 ## Prerequisites
 
 - Node.js >= 20.9
-- SSH access to a computer running X11 (for computer control features)
+- SSH access to a computer running X11 (I use KDE) (for computer control features)
 - API keys for:
   - Anthropic (Claude AI)
   - WeatherAPI (weather data)
@@ -34,6 +34,7 @@ ANTHROPIC_API_KEY=your_anthropic_api_key
 WEATHERAPI_API_KEY=your_weatherapi_key
 COMPUTER_USE_SSH_HOST=your_ssh_host
 ```
+Don't forget to configure your SSH host to work with an unlocked key via `~/.ssh/config`.
 
 ## Usage
 
